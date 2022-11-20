@@ -29,3 +29,106 @@ scale_fill_discrete = scale_fill_viridis_d
 
 theme_set(theme_minimal() + theme(legend.position = "bottom"))
 ```
+
+
+### Problem 3
+Load and clean the data for regression analysis (i.e. convert numeric to factor where appropriate, check for missing data, etc.).
+
+ Loading the Dataset
+```{r}
+birthweight = read_csv("./birthweight.csv") %>%
+  janitor::clean_names() %>%
+  mutate(
+    babysex = factor(babysex),
+    frace = factor(frace),
+    malform = factor(malform),
+    mrace = factor(mrace)
+  )
+str(birthweight)
+#View(birthweight)
+```
+The are no missing values in this dataset.
+
+
+Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
+
+
+I'll propose a model for this problem using backward stepwise selection. 
+```{r}
+model_init <- lm(bwt ~., data = birthweight)
+step(model_init, direction = "backward") #type of selection
+```
+This model selection approach starts with all predictors in the model then removes the the least significant predictor. The process is repeated until all non-significant predictors have been removed.
+
+The final model includes the following predictors:
+
+* baby sex
+* baby head circumference
+* baby length
+* mother’s weight at delivery
+* family monthly income
+* gestational age
+* mother’s height
+* mother’s race
+* number of lives births prior to this pregnancy
+* mother’s pre-pregnancy weight
+* average number of cigarettes smoked per day during pregnancy
+
+```{r}
+#final model
+model_back = lm(bwt ~ babysex + bhead + blength + delwt + fincome + 
+    gaweeks + mheight + mrace + parity + ppwt + smoken, data = birthweight)
+```
+
+
+#### Plot of Model Residuals vs. Fitted Values.
+
+```{r}
+birthweight %>%
+  add_residuals(model_back) %>%
+  add_predictions(model_back) %>%
+  ggplot(aes(x = pred, y = resid)) + geom_point(alpha = .3) +
+  labs(title = "Residuals vs. Fitted Values")
+```
+
+
+#### Model Comparison
+
+I'll compare my model to two others: 
+
+* A model using length at birth and gestational age as predictors (Main Effects)
+* One using head circumference, length, sex, and all interactions between these (Interaction Model)
+
+```{r, warning=FALSE}
+cv_df = crossv_mc(birthweight, 100) %>%
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble),
+    backwards_mod = map(train, ~lm(bwt ~ babysex + bhead + blength + delwt + fincome + 
+    gaweeks + mheight + mrace + parity + ppwt + smoken, data = .x)),
+    mod_main_effect = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    mod_interaction = map(train, ~lm(bwt ~ bhead + blength + babysex 
+                                     + bhead * blength 
+                                     + bhead * babysex 
+                                     + blength * babysex 
+                                     + bhead * blength * babysex, data = .x)), 
+    rmse_backwards_mod = map2_dbl(backwards_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_mod_main_effect = map2_dbl(mod_main_effect, test, ~rmse(model = .x, data = .y)),
+    rmse_mod_interaction = map2_dbl(mod_interaction, test, ~rmse(model = .x, data = .y)))
+  
+```
+
+Let's look at the results
+```{r}
+cv_df %>%
+  select(starts_with("rmse")) %>%
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_") %>%
+  ggplot(aes(x = model, y = rmse)) + geom_violin() +
+  labs(title = "RMSE for Cross-Validated Models", x = "Model Type", y = "RMSE")
+```
+
+The plot shows that the model made using the backward stepwise selection has the lowest RMSE, and therefore is the best performing of the three, in terms of predicting baby weight. The interaction model has a slightly greater RMSE than the proposed model, however the inclusion of interaction terms would make it harder to interpret than the other models. The main effect model had the largest RMSE.
